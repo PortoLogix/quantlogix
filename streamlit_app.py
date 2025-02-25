@@ -65,6 +65,92 @@ if check_password():
     # Sidebar for controls
     with st.sidebar:
         st.header("Trading Controls")
+        
+        # Add Liquidate All section
+        st.subheader("🚨 Liquidate All Positions")
+        liquidate_type = st.radio("Liquidation Type", ["Market", "Limit"], horizontal=True)
+        
+        if liquidate_type == "Limit":
+            col1, col2 = st.columns(2)
+            with col1:
+                price_type = st.radio("Price Type", ["Current", "Custom"], horizontal=True)
+            with col2:
+                price_offset = st.number_input("Price Offset (%)", 
+                    value=-0.5, 
+                    min_value=-10.0, 
+                    max_value=10.0, 
+                    step=0.1,
+                    help="Percentage offset from current price. Negative for below market, positive for above market."
+                )
+        
+        if st.button("Liquidate All Positions", type="primary"):
+            try:
+                # Get all positions
+                positions = api.list_positions()
+                if not positions:
+                    st.warning("No positions to liquidate")
+                else:
+                    # Show positions that will be liquidated
+                    st.write("Positions to liquidate:")
+                    position_data = []
+                    for position in positions:
+                        current_price = float(position.current_price)
+                        if liquidate_type == "Limit":
+                            if price_type == "Current":
+                                limit_price = current_price * (1 + price_offset/100)
+                            else:
+                                limit_price = st.number_input(
+                                    f"Limit price for {position.symbol}",
+                                    value=float(current_price),
+                                    step=0.01,
+                                    format="%.2f"
+                                )
+                        position_data.append({
+                            "Symbol": position.symbol,
+                            "Quantity": position.qty,
+                            "Current Price": f"${float(position.current_price):.2f}",
+                            "Market Value": f"${float(position.market_value):.2f}",
+                            "Limit Price": f"${limit_price:.2f}" if liquidate_type == "Limit" else "Market"
+                        })
+                    
+                    # Display positions in a table
+                    st.table(pd.DataFrame(position_data))
+                    
+                    # Confirmation button
+                    if st.button("⚠️ Confirm Liquidation"):
+                        for position in positions:
+                            side = 'sell' if float(position.qty) > 0 else 'buy'
+                            qty = abs(float(position.qty))
+                            
+                            if liquidate_type == "Market":
+                                api.submit_order(
+                                    symbol=position.symbol,
+                                    qty=qty,
+                                    side=side,
+                                    type='market',
+                                    time_in_force='gtc'
+                                )
+                            else:
+                                if price_type == "Current":
+                                    limit_price = float(position.current_price) * (1 + price_offset/100)
+                                else:
+                                    limit_price = float(st.session_state.get(f"limit_price_{position.symbol}", position.current_price))
+                                
+                                api.submit_order(
+                                    symbol=position.symbol,
+                                    qty=qty,
+                                    side=side,
+                                    type='limit',
+                                    time_in_force='gtc',
+                                    limit_price=limit_price
+                                )
+                        
+                        st.success(f"Successfully submitted orders to liquidate {len(positions)} positions")
+            except Exception as e:
+                st.error(f"Error liquidating positions: {str(e)}")
+        
+        st.divider()  # Add a visual separator
+        
         symbol = st.text_input("Symbol", value="AAPL")
         quantity = st.number_input("Quantity", min_value=1, value=100)
         order_type = st.selectbox("Order Type", ["Market", "Limit"])
