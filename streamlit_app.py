@@ -1,5 +1,12 @@
 import streamlit as st
 import hmac
+import pandas as pd
+import plotly.graph_objects as go
+import alpaca_trade_api as tradeapi
+from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+import traceback
 
 # Must be the first Streamlit command
 st.set_page_config(
@@ -7,6 +14,44 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
+
+# Load environment variables
+load_dotenv()
+
+# Initialize Alpaca API using environment variables or secrets
+api_key = os.getenv("APCA_API_KEY_ID")
+api_secret = os.getenv("APCA_API_SECRET_KEY")
+base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+
+# If local env vars not found, try Streamlit secrets
+if not api_key or not api_secret:
+    try:
+        api_key = st.secrets["PAPER_API_KEY"]
+        api_secret = st.secrets["PAPER_API_SECRET"]
+        base_url = st.secrets.get("PAPER_BASE_URL", "https://paper-api.alpaca.markets")
+    except Exception as e:
+        st.error("""
+        ⚠️ API credentials not found. Please ensure either:
+        1. Local .env file exists with APCA_API_KEY_ID and APCA_API_SECRET_KEY
+        2. Streamlit Cloud secrets are configured with PAPER_API_KEY and PAPER_API_SECRET
+        """)
+        st.stop()
+
+try:
+    api = tradeapi.REST(
+        key_id=api_key,
+        secret_key=api_secret,
+        base_url=base_url
+    )
+    
+    # Test API connection
+    account = api.get_account()
+    st.sidebar.success("✅ Connected to Alpaca API")
+except Exception as e:
+    st.error(f"Error connecting to Alpaca API: {str(e)}")
+    st.write("Debug: Full error traceback:")
+    st.code(traceback.format_exc())
+    st.stop()
 
 def check_password():
     """Returns `True` if the user had the correct password."""
@@ -34,49 +79,6 @@ def check_password():
 
 # If password is correct, show the app
 if check_password():
-    import pandas as pd
-    import plotly.graph_objects as go
-    import alpaca_trade_api as tradeapi
-    from datetime import datetime, timedelta
-    import os
-    from dotenv import load_dotenv
-
-    # Load environment variables
-    load_dotenv()
-
-    # Initialize Alpaca API using environment variables or secrets
-    api_key = os.getenv("APCA_API_KEY_ID")
-    api_secret = os.getenv("APCA_API_SECRET_KEY")
-    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-
-    # If local env vars not found, try Streamlit secrets
-    if not api_key or not api_secret:
-        try:
-            api_key = st.secrets["PAPER_API_KEY"]
-            api_secret = st.secrets["PAPER_API_SECRET"]
-            base_url = st.secrets.get("PAPER_BASE_URL", "https://paper-api.alpaca.markets")
-        except Exception as e:
-            st.error("""
-            ⚠️ API credentials not found. Please ensure either:
-            1. Local .env file exists with APCA_API_KEY_ID and APCA_API_SECRET_KEY
-            2. Streamlit Cloud secrets are configured with PAPER_API_KEY and PAPER_API_SECRET
-            """)
-            st.stop()
-
-    try:
-        api = tradeapi.REST(
-            key_id=api_key,
-            secret_key=api_secret,
-            base_url=base_url
-        )
-        
-        # Test API connection
-        account = api.get_account()
-        st.sidebar.success("✅ Connected to Alpaca API")
-    except Exception as e:
-        st.error(f"Error connecting to Alpaca API: {str(e)}")
-        st.stop()
-
     # Title
     st.title("QuantLogix Trading Dashboard")
 
@@ -277,6 +279,5 @@ if check_password():
 
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
-        import traceback
         st.write("Debug: Full error traceback:")
         st.code(traceback.format_exc())
