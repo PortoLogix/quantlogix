@@ -45,9 +45,23 @@ if check_password():
     load_dotenv()
 
     # Initialize Alpaca API using environment variables or secrets
-    api_key = os.getenv("APCA_API_KEY_ID") or st.secrets.get("PAPER_API_KEY")
-    api_secret = os.getenv("APCA_API_SECRET_KEY") or st.secrets.get("PAPER_API_SECRET")
-    base_url = os.getenv("ALPACA_PAPER_URL") or st.secrets.get("PAPER_BASE_URL", "https://paper-api.alpaca.markets")
+    api_key = os.getenv("APCA_API_KEY_ID")
+    api_secret = os.getenv("APCA_API_SECRET_KEY")
+    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+
+    # If local env vars not found, try Streamlit secrets
+    if not api_key or not api_secret:
+        try:
+            api_key = st.secrets["PAPER_API_KEY"]
+            api_secret = st.secrets["PAPER_API_SECRET"]
+            base_url = st.secrets.get("PAPER_BASE_URL", "https://paper-api.alpaca.markets")
+        except Exception as e:
+            st.error("""
+            ⚠️ API credentials not found. Please ensure either:
+            1. Local .env file exists with APCA_API_KEY_ID and APCA_API_SECRET_KEY
+            2. Streamlit Cloud secrets are configured with PAPER_API_KEY and PAPER_API_SECRET
+            """)
+            st.stop()
 
     try:
         api = tradeapi.REST(
@@ -55,6 +69,10 @@ if check_password():
             secret_key=api_secret,
             base_url=base_url
         )
+        
+        # Test API connection
+        account = api.get_account()
+        st.sidebar.success("✅ Connected to Alpaca API")
     except Exception as e:
         st.error(f"Error connecting to Alpaca API: {str(e)}")
         st.stop()
