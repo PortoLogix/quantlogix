@@ -4,12 +4,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import os
-from dotenv import load_dotenv
-import alpaca_trade_api as tradeapi
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Set page config
@@ -23,25 +20,41 @@ st.set_page_config(
 st.title("QuantLogix Trading Dashboard")
 
 try:
-    # Load environment variables
-    load_dotenv()
+    # Initialize in demo mode by default
+    demo_mode = True
     
-    # Initialize Alpaca API
-    api_key = os.getenv("APCA_API_KEY_ID")
-    api_secret = os.getenv("APCA_API_SECRET_KEY")
-    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+    try:
+        import os
+        from dotenv import load_dotenv
+        # Try to load environment variables
+        load_dotenv()
+    except ImportError:
+        st.warning("python-dotenv not installed. Running in demo mode.")
     
-    if not api_key or not api_secret:
-        st.error("API credentials not found. Using demo mode.")
-        demo_mode = True
-    else:
-        api = tradeapi.REST(
-            key_id=api_key,
-            secret_key=api_secret,
-            base_url=base_url
-        )
-        demo_mode = False
-        st.sidebar.success("✅ Connected to Alpaca API")
+    try:
+        import alpaca_trade_api as tradeapi
+        # Initialize Alpaca API if credentials are available
+        api_key = os.getenv("APCA_API_KEY_ID")
+        api_secret = os.getenv("APCA_API_SECRET_KEY")
+        base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+        
+        if api_key and api_secret:
+            try:
+                api = tradeapi.REST(
+                    key_id=api_key,
+                    secret_key=api_secret,
+                    base_url=base_url
+                )
+                # Test API connection
+                account = api.get_account()
+                demo_mode = False
+                st.sidebar.success("✅ Connected to Alpaca API")
+            except Exception as e:
+                st.warning(f"Could not connect to Alpaca API. Running in demo mode. Error: {str(e)}")
+        else:
+            st.info("No API credentials found. Running in demo mode.")
+    except ImportError:
+        st.warning("alpaca-trade-api not installed. Running in demo mode.")
 
     # Sidebar
     st.sidebar.header("Settings")
@@ -52,18 +65,17 @@ try:
 
     if demo_mode:
         # Mock data for demonstration
-        @st.cache_data
-        def generate_mock_data():
-            dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
-            portfolio_value = np.random.uniform(9000, 11000, size=100).cumsum()
-            return pd.DataFrame({
-                'Date': dates,
-                'Portfolio Value': portfolio_value
-            })
-
-        data = generate_mock_data()
+        dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
+        portfolio_value = np.random.uniform(9000, 11000, size=100).cumsum()
+        data = pd.DataFrame({
+            'Date': dates,
+            'Portfolio Value': portfolio_value
+        })
+        
         portfolio_value = data['Portfolio Value'].iloc[-1]
-        daily_change = ((data['Portfolio Value'].iloc[-1] / data['Portfolio Value'].iloc[-2]) - 1) * 100
+        daily_change = data['Portfolio Value'].iloc[-1] - data['Portfolio Value'].iloc[-2]
+        daily_change_pct = ((data['Portfolio Value'].iloc[-1] / data['Portfolio Value'].iloc[-2]) - 1) * 100
+        
         positions_data = {
             'Symbol': ['AAPL', 'GOOGL', 'TSLA', 'MSFT', 'AMZN'],
             'Quantity': [100, 50, 200, 150, 75],
@@ -75,7 +87,6 @@ try:
         
     else:
         # Get real data from Alpaca
-        account = api.get_account()
         portfolio_value = float(account.portfolio_value)
         daily_change = float(account.portfolio_value) - float(account.last_equity)
         daily_change_pct = (daily_change / float(account.last_equity)) * 100 if float(account.last_equity) > 0 else 0
@@ -103,13 +114,13 @@ try:
         st.metric(
             "Portfolio Value",
             f"${portfolio_value:,.2f}",
-            f"{daily_change_pct:.2f}%" if not demo_mode else f"{daily_change:.2f}%"
+            f"{daily_change_pct:.2f}%"
         )
 
     with col2:
         st.metric(
             "Daily P&L",
-            f"${daily_change:,.2f}" if not demo_mode else f"${data['Portfolio Value'].iloc[-1] - data['Portfolio Value'].iloc[-2]:,.2f}",
+            f"${daily_change:,.2f}",
             None
         )
 
@@ -122,8 +133,9 @@ try:
 
     # Portfolio Performance Chart
     st.subheader("Portfolio Performance")
+    fig = go.Figure()
+    
     if demo_mode:
-        fig = go.Figure()
         fig.add_trace(
             go.Scatter(
                 x=data['Date'],
@@ -134,25 +146,27 @@ try:
             )
         )
     else:
-        # Get historical portfolio value
-        end = datetime.now()
-        start = end - timedelta(days=30)  # Default to 30 days
-        portfolio_history = api.get_portfolio_history(
-            timeframe="1D",
-            start=start.strftime('%Y-%m-%d'),
-            end=end.strftime('%Y-%m-%d')
-        )
-        
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=portfolio_history.timestamp,
-                y=portfolio_history.equity,
-                mode='lines',
-                name='Portfolio Value',
-                line=dict(color='#00ff00', width=2)
+        try:
+            # Get historical portfolio value
+            end = datetime.now()
+            start = end - timedelta(days=30)
+            portfolio_history = api.get_portfolio_history(
+                timeframe="1D",
+                start=start.strftime('%Y-%m-%d'),
+                end=end.strftime('%Y-%m-%d')
             )
-        )
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=portfolio_history.timestamp,
+                    y=portfolio_history.equity,
+                    mode='lines',
+                    name='Portfolio Value',
+                    line=dict(color='#00ff00', width=2)
+                )
+            )
+        except Exception as e:
+            st.warning(f"Could not load portfolio history: {str(e)}")
 
     fig.update_layout(
         template='plotly_dark',
@@ -175,18 +189,21 @@ try:
         if st.sidebar.button("🚨 Liquidate All"):
             confirm = st.sidebar.button("Confirm Liquidation")
             if confirm:
-                for _, position in positions_df.iterrows():
-                    api.submit_order(
-                        symbol=position['Symbol'],
-                        qty=position['Quantity'],
-                        side='sell',
-                        type='market',
-                        time_in_force='day'
-                    )
-                st.sidebar.success("Liquidation orders submitted!")
-                st.experimental_rerun()
+                try:
+                    for _, position in positions_df.iterrows():
+                        api.submit_order(
+                            symbol=position['Symbol'],
+                            qty=position['Quantity'],
+                            side='sell',
+                            type='market',
+                            time_in_force='day'
+                        )
+                    st.sidebar.success("Liquidation orders submitted!")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Error submitting orders: {str(e)}")
 
 except Exception as e:
-    st.error("Error occurred:")
+    st.error("An error occurred while running the dashboard:")
     st.code(str(e))
     logger.exception("Error in app:")
