@@ -1,9 +1,12 @@
 import streamlit as st
-import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import logging
+import os
+from dotenv import load_dotenv
+import alpaca_trade_api as tradeapi
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,55 +19,133 @@ st.set_page_config(
     layout="wide"
 )
 
+# Initialize session state for demo mode
+if 'demo_mode' not in st.session_state:
+    st.session_state.demo_mode = True
+
 # Main dashboard content
 st.title("QuantLogix Trading Dashboard")
 
 try:
-    # Initialize in demo mode by default
-    demo_mode = True
+    # Load environment variables
+    load_dotenv()
     
-    try:
-        import os
-        from dotenv import load_dotenv
-        # Try to load environment variables
-        load_dotenv()
-    except ImportError:
-        st.warning("python-dotenv not installed. Running in demo mode.")
+    # Initialize Alpaca API
+    api_key = os.getenv("APCA_API_KEY_ID")
+    api_secret = os.getenv("APCA_API_SECRET_KEY")
+    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
     
-    try:
-        import alpaca_trade_api as tradeapi
-        # Initialize Alpaca API if credentials are available
-        api_key = os.getenv("APCA_API_KEY_ID")
-        api_secret = os.getenv("APCA_API_SECRET_KEY")
-        base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+    if not api_key or not api_secret:
+        st.warning("API credentials not found. Running in demo mode.")
+        st.session_state.demo_mode = True
+    else:
+        try:
+            api = tradeapi.REST(
+                key_id=api_key,
+                secret_key=api_secret,
+                base_url=base_url
+            )
+            # Test API connection
+            account = api.get_account()
+            st.session_state.demo_mode = False
+            st.sidebar.success("✅ Connected to Alpaca API")
+        except Exception as e:
+            st.warning(f"Could not connect to Alpaca API. Running in demo mode. Error: {str(e)}")
+            st.session_state.demo_mode = True
+
+    # Sidebar for controls
+    with st.sidebar:
+        st.header("Trading Controls")
         
-        if api_key and api_secret:
-            try:
-                api = tradeapi.REST(
-                    key_id=api_key,
-                    secret_key=api_secret,
-                    base_url=base_url
-                )
-                # Test API connection
-                account = api.get_account()
-                demo_mode = False
-                st.sidebar.success("✅ Connected to Alpaca API")
-            except Exception as e:
-                st.warning(f"Could not connect to Alpaca API. Running in demo mode. Error: {str(e)}")
-        else:
-            st.info("No API credentials found. Running in demo mode.")
-    except ImportError:
-        st.warning("alpaca-trade-api not installed. Running in demo mode.")
+        if not st.session_state.demo_mode:
+            # Add Liquidate All section
+            st.subheader("🚨 Liquidate All Positions")
+            liquidate_type = st.radio("Liquidation Type", ["Market", "Limit"], horizontal=True)
+            
+            if liquidate_type == "Limit":
+                col1, col2 = st.columns(2)
+                with col1:
+                    price_type = st.radio("Price Type", ["Current", "Custom"], horizontal=True)
+                with col2:
+                    price_offset = st.number_input("Price Offset (%)", 
+                        value=-0.5, 
+                        min_value=-10.0, 
+                        max_value=10.0, 
+                        step=0.1,
+                        help="Percentage offset from current price. Negative for below market, positive for above market."
+                    )
+            
+            if st.button("Liquidate All Positions", type="primary"):
+                try:
+                    # Get all positions
+                    positions = api.list_positions()
+                    if not positions:
+                        st.warning("No positions to liquidate")
+                    else:
+                        # Show positions that will be liquidated
+                        st.write("Positions to liquidate:")
+                        position_data = []
+                        for position in positions:
+                            current_price = float(position.current_price)
+                            if liquidate_type == "Limit":
+                                if price_type == "Current":
+                                    limit_price = current_price * (1 + price_offset/100)
+                                else:
+                                    limit_price = st.number_input(
+                                        f"Limit price for {position.symbol}",
+                                        value=float(current_price),
+                                        step=0.01,
+                                        format="%.2f"
+                                    )
+                            position_data.append({
+                                "Symbol": position.symbol,
+                                "Quantity": position.qty,
+                                "Current Price": f"${float(position.current_price):.2f}",
+                                "Market Value": f"${float(position.market_value):.2f}",
+                                "Limit Price": f"${limit_price:.2f}" if liquidate_type == "Limit" else "Market"
+                            })
+                        
+                        # Display positions in a table
+                        st.table(pd.DataFrame(position_data))
+                        
+                        # Confirmation button
+                        if st.button("⚠️ Confirm Liquidation"):
+                            for position in positions:
+                                side = 'sell' if float(position.qty) > 0 else 'buy'
+                                qty = abs(float(position.qty))
+                                
+                                if liquidate_type == "Market":
+                                    api.submit_order(
+                                        symbol=position.symbol,
+                                        qty=qty,
+                                        side=side,
+                                        type='market',
+                                        time_in_force='gtc'
+                                    )
+                                else:
+                                    if price_type == "Current":
+                                        limit_price = float(position.current_price) * (1 + price_offset/100)
+                                    else:
+                                        limit_price = float(st.session_state.get(f"limit_price_{position.symbol}", position.current_price))
+                                    
+                                    api.submit_order(
+                                        symbol=position.symbol,
+                                        qty=qty,
+                                        side=side,
+                                        type='limit',
+                                        time_in_force='gtc',
+                                        limit_price=limit_price
+                                    )
+                            
+                            st.success(f"Successfully submitted orders to liquidate {len(positions)} positions")
+                except Exception as e:
+                    st.error(f"Error liquidating positions: {str(e)}")
+            
+            st.divider()  # Add a visual separator
 
-    # Sidebar
-    st.sidebar.header("Settings")
-    timeframe = st.sidebar.selectbox(
-        "Select Timeframe",
-        ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD"]
-    )
-
-    if demo_mode:
-        # Mock data for demonstration
+    # Main content area
+    if st.session_state.demo_mode:
+        # Generate mock data
         dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
         portfolio_value = np.random.uniform(9000, 11000, size=100).cumsum()
         data = pd.DataFrame({
@@ -86,28 +167,32 @@ try:
         positions_df = pd.DataFrame(positions_data)
         
     else:
-        # Get real data from Alpaca
-        portfolio_value = float(account.portfolio_value)
-        daily_change = float(account.portfolio_value) - float(account.last_equity)
-        daily_change_pct = (daily_change / float(account.last_equity)) * 100 if float(account.last_equity) > 0 else 0
-        
-        # Get positions
-        positions = api.list_positions()
-        if positions:
-            positions_data = []
-            for position in positions:
-                positions_data.append({
-                    'Symbol': position.symbol,
-                    'Quantity': int(position.qty),
-                    'Entry Price': float(position.avg_entry_price),
-                    'Current Price': float(position.current_price),
-                    'P&L': float(position.unrealized_pl)
-                })
-            positions_df = pd.DataFrame(positions_data)
-        else:
-            positions_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Entry Price', 'Current Price', 'P&L'])
+        try:
+            # Get real data from Alpaca
+            portfolio_value = float(account.portfolio_value)
+            daily_change = float(account.portfolio_value) - float(account.last_equity)
+            daily_change_pct = (daily_change / float(account.last_equity)) * 100 if float(account.last_equity) > 0 else 0
+            
+            # Get positions
+            positions = api.list_positions()
+            if positions:
+                positions_data = []
+                for position in positions:
+                    positions_data.append({
+                        'Symbol': position.symbol,
+                        'Quantity': int(position.qty),
+                        'Entry Price': float(position.avg_entry_price),
+                        'Current Price': float(position.current_price),
+                        'P&L': float(position.unrealized_pl)
+                    })
+                positions_df = pd.DataFrame(positions_data)
+            else:
+                positions_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Entry Price', 'Current Price', 'P&L'])
+        except Exception as e:
+            st.error(f"Error fetching account data: {str(e)}")
+            st.stop()
 
-    # Main content area
+    # Display metrics
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -135,7 +220,7 @@ try:
     st.subheader("Portfolio Performance")
     fig = go.Figure()
     
-    if demo_mode:
+    if st.session_state.demo_mode:
         fig.add_trace(
             go.Scatter(
                 x=data['Date'],
@@ -184,24 +269,34 @@ try:
     else:
         st.info("No active positions")
 
-    # Add liquidate button in sidebar if we have positions and are not in demo mode
-    if not demo_mode and len(positions_df) > 0:
-        if st.sidebar.button("🚨 Liquidate All"):
-            confirm = st.sidebar.button("Confirm Liquidation")
-            if confirm:
-                try:
-                    for _, position in positions_df.iterrows():
-                        api.submit_order(
-                            symbol=position['Symbol'],
-                            qty=position['Quantity'],
-                            side='sell',
-                            type='market',
-                            time_in_force='day'
-                        )
-                    st.sidebar.success("Liquidation orders submitted!")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error submitting orders: {str(e)}")
+    # Transaction History
+    if not st.session_state.demo_mode:
+        st.subheader("Recent Transactions")
+        try:
+            # Get recent orders
+            orders = api.list_orders(
+                status='all',
+                limit=10,
+                nested=True  # Include nested multi-leg orders
+            )
+            
+            if orders:
+                orders_data = []
+                for order in orders:
+                    orders_data.append({
+                        'Symbol': order.symbol,
+                        'Side': order.side.upper(),
+                        'Type': order.type.upper(),
+                        'Quantity': order.qty,
+                        'Status': order.status.upper(),
+                        'Filled At': order.filled_at if order.filled_at else 'N/A',
+                        'Fill Price': f"${float(order.filled_avg_price):.2f}" if order.filled_avg_price else 'N/A'
+                    })
+                st.dataframe(pd.DataFrame(orders_data), use_container_width=True)
+            else:
+                st.info("No recent transactions")
+        except Exception as e:
+            st.warning(f"Could not load transaction history: {str(e)}")
 
 except Exception as e:
     st.error("An error occurred while running the dashboard:")
