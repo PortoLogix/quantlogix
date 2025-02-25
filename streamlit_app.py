@@ -1,11 +1,5 @@
 import streamlit as st
 import hmac
-import pandas as pd
-import plotly.graph_objects as go
-import alpaca_trade_api as tradeapi
-from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
 
 # Must be the first Streamlit command
 st.set_page_config(
@@ -40,6 +34,13 @@ def check_password():
 
 # If password is correct, show the app
 if check_password():
+    import pandas as pd
+    import plotly.graph_objects as go
+    import alpaca_trade_api as tradeapi
+    from datetime import datetime, timedelta
+    import os
+    from dotenv import load_dotenv
+
     # Load environment variables
     load_dotenv()
 
@@ -64,41 +65,6 @@ if check_password():
     # Sidebar for controls
     with st.sidebar:
         st.header("Trading Controls")
-        
-        # Add Liquidate All button
-        if st.button("🚨 Liquidate All", type="primary"):
-            try:
-                positions = api.list_positions()
-                if not positions:
-                    st.warning("No positions to liquidate")
-                else:
-                    # Show positions to be liquidated
-                    st.write("Positions to liquidate:")
-                    position_data = []
-                    for position in positions:
-                        position_data.append({
-                            "Symbol": position.symbol,
-                            "Quantity": position.qty,
-                            "Market Value": f"${float(position.market_value):.2f}"
-                        })
-                    st.table(pd.DataFrame(position_data))
-                    
-                    # Confirm liquidation
-                    if st.button("⚠️ Confirm Liquidation"):
-                        for position in positions:
-                            api.submit_order(
-                                symbol=position.symbol,
-                                qty=position.qty,
-                                side='sell' if float(position.qty) > 0 else 'buy',
-                                type='market',
-                                time_in_force='gtc'
-                            )
-                        st.success(f"Successfully liquidated {len(positions)} positions")
-                        st.experimental_rerun()
-            except Exception as e:
-                st.error(f"Error liquidating positions: {str(e)}")
-        
-        st.divider()
         symbol = st.text_input("Symbol", value="AAPL")
         quantity = st.number_input("Quantity", min_value=1, value=100)
         order_type = st.selectbox("Order Type", ["Market", "Limit"])
